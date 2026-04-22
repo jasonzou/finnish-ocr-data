@@ -39,7 +39,7 @@ PDF_FOLDER = "theseus_pdfs"
 DATASET_FOLDER = "theseus_ocr_dataset"
 
 # Number of PDFs to download for testing
-NUM_PDFS_TO_DOWNLOAD = 10
+NUM_PDFS_TO_DOWNLOAD = 1000
 
 # Metadata format to harvest (Dublin Core is standard)
 METADATA_PREFIX = "oai_dc"
