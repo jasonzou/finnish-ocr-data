@@ -1,0 +1,106 @@
+import argparse
+import os
+import json
+import glob
+import pdfplumber
+from tqdm import tqdm
+
+PDF_FOLDER = "theseus_pdfs"
+DATASET_FOLDER = "theseus_ocr_dataset"
+
+
+def extract_text_from_pdf(pdf_path: str, resolution: int = 300) -> list[dict]:
+    pdf_stem = os.path.splitext(os.path.basename(pdf_path))[0]
+    crop_dir = os.path.join(DATASET_FOLDER, "paragraph_crops", pdf_stem)
+    os.makedirs(crop_dir, exist_ok=True)
+
+    records = []
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages):
+                text_lines = page.extract_text_lines(layout=True)
+
+                # Group lines into paragraphs, tracking the bounding box of each.
+                para_groups: list[tuple[list[str], tuple[float, float, float, float]]] = []
+                current_texts: list[str] = []
+                current_bbox: list[float] = []
+                last_bottom: float | None = None
+
+                for line in text_lines:
+                    line_text = line["text"].strip()
+                    if not line_text:
+                        continue
+                    x0, top, x1, bottom = line["x0"], line["top"], line["x1"], line["bottom"]
+                    if last_bottom is not None and (top - last_bottom) > 5:
+                        if current_texts:
+                            para_groups.append((current_texts, (current_bbox[0], current_bbox[1], current_bbox[2], current_bbox[3])))
+                            current_texts, current_bbox = [], []
+                    if not current_texts:
+                        current_bbox = [x0, top, x1, bottom]
+                    else:
+                        current_bbox[0] = min(current_bbox[0], x0)
+                        current_bbox[1] = min(current_bbox[1], top)
+                        current_bbox[2] = max(current_bbox[2], x1)
+                        current_bbox[3] = max(current_bbox[3], bottom)
+                    current_texts.append(line_text)
+                    last_bottom = bottom
+
+                if current_texts:
+                    para_groups.append((current_texts, (current_bbox[0], current_bbox[1], current_bbox[2], current_bbox[3])))
+
+                # Render page at 72 dpi once, crop each paragraph.
+                page_image = page.to_image(resolution=resolution)
+                scale = page_image.scale
+                pil_img = page_image.original
+
+                for para_idx, (texts, bbox) in enumerate(para_groups):
+                    x0, top, x1, bottom = bbox
+                    pad = 2
+                    crop = pil_img.crop((x0 * scale - pad, top * scale - pad, x1 * scale + pad, bottom * scale + pad))
+                    crop_filename = f"p{page_num + 1}_para{para_idx + 1}.png"
+                    crop.save(os.path.join(crop_dir, crop_filename))
+                    records.append({
+                        "pdf_file": os.path.basename(pdf_path),
+                        "page": page_num + 1,
+                        "image": os.path.join("paragraph_crops", pdf_stem, crop_filename),
+                        "text": " ".join(texts),
+                    })
+
+    except Exception as e:
+        print(f"❌ Error processing {pdf_path}: {e}")
+
+    return records
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Extract paragraph crops from PDFs.")
+    parser.add_argument(
+        "--resolution", "-r",
+        type=int,
+        choices=[72, 144, 200, 300],
+        default=300,
+        help="Crop image resolution in DPI (default: 300)",
+    )
+    args = parser.parse_args()
+
+    pdf_files = sorted(glob.glob(os.path.join(PDF_FOLDER, "*.pdf")))
+    if not pdf_files:
+        print(f"No PDFs found in '{PDF_FOLDER}/'")
+        return
+
+    print(f"Processing {len(pdf_files)} PDFs at {args.resolution} dpi...")
+    os.makedirs(DATASET_FOLDER, exist_ok=True)
+
+    all_records = []
+    for pdf_path in tqdm(pdf_files, desc="PDFs"):
+        all_records.extend(extract_text_from_pdf(pdf_path, resolution=args.resolution))
+
+    dataset_path = os.path.join(DATASET_FOLDER, "theseus_ocr_dataset.json")
+    with open(dataset_path, "w", encoding="utf-8") as f:
+        json.dump(all_records, f, indent=2, ensure_ascii=False)
+
+    print(f"✅ {len(all_records)} paragraph records saved to '{dataset_path}'")
+
+
+if __name__ == "__main__":
+    main()
