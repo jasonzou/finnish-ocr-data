@@ -31,21 +31,11 @@ def load_image_bytes(image_rel_path: str) -> bytes | None:
         return None
 
 
-def write_parquet(records: list[dict], out_dir: str) -> None:
-    os.makedirs(out_dir, exist_ok=True)
+MAX_SHARD_BYTES = 50 * 1024 * 1024  # 50 MB per shard
 
-    pdf_files, pages, texts, images = [], [], [], []
-    for rec in tqdm(records, desc="Loading images"):
-        img_bytes = load_image_bytes(rec["image"])
-        if img_bytes is None:
-            continue
-        pdf_files.append(rec["pdf_file"])
-        pages.append(rec["page"])
-        texts.append(rec["text"])
-        # HF Image feature is stored as a struct {bytes, path}
-        images.append({"bytes": img_bytes, "path": os.path.basename(rec["image"])})
 
-    table = pa.table({
+def _make_table(pdf_files, pages, texts, images):
+    return pa.table({
         "pdf_file": pa.array(pdf_files, type=pa.string()),
         "page":     pa.array(pages,     type=pa.int32()),
         "text":     pa.array(texts,     type=pa.string()),
@@ -55,10 +45,48 @@ def write_parquet(records: list[dict], out_dir: str) -> None:
                     ])),
     })
 
-    parquet_path = os.path.join(out_dir, "data", "train-00000-of-00001.parquet")
-    os.makedirs(os.path.dirname(parquet_path), exist_ok=True)
-    pq.write_table(table, parquet_path, compression="snappy")
-    print(f"✅ Wrote {len(table)} rows → {parquet_path}")
+
+def write_parquet(records: list[dict], out_dir: str) -> int:
+    data_dir = os.path.join(out_dir, "data")
+    os.makedirs(data_dir, exist_ok=True)
+
+    shards: list[pa.Table] = []
+    pdf_files, pages, texts, images = [], [], [], []
+    shard_bytes = 0
+
+    def flush():
+        if pdf_files:
+            shards.append(_make_table(pdf_files, pages, texts, images))
+            pdf_files.clear()
+            pages.clear()
+            texts.clear()
+            images.clear()
+
+    for rec in tqdm(records, desc="Loading images"):
+        img_bytes = load_image_bytes(rec["image"])
+        if img_bytes is None:
+            continue
+        if shard_bytes + len(img_bytes) > MAX_SHARD_BYTES and pdf_files:
+            flush()
+            shard_bytes = 0
+        pdf_files.append(rec["pdf_file"])
+        pages.append(rec["page"])
+        texts.append(rec["text"])
+        images.append({"bytes": img_bytes, "path": os.path.basename(rec["image"])})
+        shard_bytes += len(img_bytes)
+
+    flush()
+
+    total_shards = len(shards)
+    total_rows = 0
+    for idx, table in enumerate(shards):
+        path = os.path.join(data_dir, f"train-{idx:05d}-of-{total_shards:05d}.parquet")
+        pq.write_table(table, path, compression="snappy")
+        size_mb = os.path.getsize(path) / 1024 / 1024
+        print(f"✅ Shard {idx + 1}/{total_shards}: {len(table)} rows, {size_mb:.1f} MB → {path}")
+        total_rows += len(table)
+
+    return total_rows
 
 
 README_TEMPLATE = """\
