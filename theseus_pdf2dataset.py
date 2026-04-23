@@ -83,6 +83,15 @@ def extract_text_from_pdf(pdf_path: str, resolution: int = 300,
                     right  = min(img_w, x1 * scale + pad)
                     lower  = min(img_h, bottom * scale + pad)
                     crop = pil_img.crop((left, upper, right, lower))
+                    if crop.width < 28:
+                        extra = (30 - crop.width + 1) // 2
+                        crop = pil_img.crop((
+                            max(0,     left  - extra),
+                            max(0,     upper - extra),
+                            min(img_w, right + extra),
+                            min(img_h, lower + extra),
+                        ))
+                        print(f"  padded p{page_num + 1}_para{para_idx + 1}.png  ({crop.width}×{crop.height}px)  [{pdf_stem}]")
                     crop_filename = f"p{page_num + 1}_para{para_idx + 1}.png"
                     crop.save(os.path.join(crop_dir, crop_filename), dpi=(resolution, resolution))
                     records.append({
