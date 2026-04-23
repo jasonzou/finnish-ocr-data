@@ -3,22 +3,41 @@ import os
 import json
 import glob
 import pdfplumber
-from pdf2image import convert_from_path
+from PIL import Image
 from tqdm import tqdm
 
 PDF_FOLDER = "theseus_pdfs"
 DATASET_FOLDER = "theseus_ocr_dataset"
 
 
-def extract_text_from_pdf(pdf_path: str, resolution: int = 300) -> list[dict]:
+def _render_pages_pymupdf(pdf_path: str, dpi: int) -> list[Image.Image]:
+    import fitz
+    doc = fitz.open(pdf_path)
+    images = []
+    for page in doc:
+        pix = page.get_pixmap(dpi=dpi)
+        images.append(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
+    doc.close()
+    return images
+
+
+def _render_pages_pdf2image(pdf_path: str, dpi: int) -> list[Image.Image]:
+    from pdf2image import convert_from_path
+    return convert_from_path(pdf_path, dpi=dpi)
+
+
+def extract_text_from_pdf(pdf_path: str, resolution: int = 300,
+                           renderer: str = "pymupdf") -> list[dict]:
     pdf_stem = os.path.splitext(os.path.basename(pdf_path))[0]
     crop_dir = os.path.join(DATASET_FOLDER, "paragraph_crops", pdf_stem)
     os.makedirs(crop_dir, exist_ok=True)
 
     records = []
     try:
-        # Render all pages at target DPI upfront.
-        page_images = convert_from_path(pdf_path, dpi=resolution)
+        if renderer == "pymupdf":
+            page_images = _render_pages_pymupdf(pdf_path, dpi=resolution)
+        else:
+            page_images = _render_pages_pdf2image(pdf_path, dpi=resolution)
 
         with pdfplumber.open(pdf_path) as pdf:
             for page_num, (page, pil_img) in enumerate(zip(pdf.pages, page_images)):
@@ -88,6 +107,12 @@ def main() -> None:
         default=300,
         help="Crop image resolution in DPI (default: 300)",
     )
+    parser.add_argument(
+        "--renderer",
+        choices=["pymupdf", "pdf2image"],
+        default="pymupdf",
+        help="PDF renderer: pymupdf (no poppler) or pdf2image (requires poppler) (default: pymupdf)",
+    )
     args = parser.parse_args()
 
     pdf_files = sorted(glob.glob(os.path.join(PDF_FOLDER, "*.pdf")))
@@ -95,12 +120,12 @@ def main() -> None:
         print(f"No PDFs found in '{PDF_FOLDER}/'")
         return
 
-    print(f"Processing {len(pdf_files)} PDFs at {args.resolution} dpi...")
+    print(f"Processing {len(pdf_files)} PDFs at {args.resolution} dpi (renderer: {args.renderer})...")
     os.makedirs(DATASET_FOLDER, exist_ok=True)
 
     all_records = []
     for pdf_path in tqdm(pdf_files, desc="PDFs"):
-        all_records.extend(extract_text_from_pdf(pdf_path, resolution=args.resolution))
+        all_records.extend(extract_text_from_pdf(pdf_path, resolution=args.resolution, renderer=args.renderer))
 
     dataset_path = os.path.join(DATASET_FOLDER, "theseus_ocr_dataset.json")
     with open(dataset_path, "w", encoding="utf-8") as f:

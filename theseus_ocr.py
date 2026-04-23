@@ -5,7 +5,6 @@ from html.parser import HTMLParser
 from urllib.parse import urlparse, parse_qs
 from sickle import Sickle
 import pdfplumber
-from pdf2image import convert_from_path
 from tqdm import tqdm
 import time
 
@@ -160,7 +159,24 @@ def download_pdfs(pdf_urls):
     return downloaded_files
 
 # ---------------------- STEP 3: EXTRACT TEXT ----------------------
-def extract_text_from_pdf(pdf_path, dpi: int = DEFAULT_DPI):
+def _render_pages_pymupdf(pdf_path, dpi: int):
+    import fitz
+    from PIL import Image
+    doc = fitz.open(pdf_path)
+    images = []
+    for page in doc:
+        pix = page.get_pixmap(dpi=dpi)
+        images.append(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
+    doc.close()
+    return images
+
+
+def _render_pages_pdf2image(pdf_path, dpi: int):
+    from pdf2image import convert_from_path
+    return convert_from_path(pdf_path, dpi=dpi)
+
+
+def extract_text_from_pdf(pdf_path, dpi: int = DEFAULT_DPI, renderer: str = "pymupdf"):
     pdf_data = {
         "pdf_file": os.path.basename(pdf_path),
         "pages": []
@@ -171,7 +187,10 @@ def extract_text_from_pdf(pdf_path, dpi: int = DEFAULT_DPI):
     os.makedirs(crop_dir, exist_ok=True)
 
     try:
-        page_images = convert_from_path(pdf_path, dpi=dpi)
+        if renderer == "pymupdf":
+            page_images = _render_pages_pymupdf(pdf_path, dpi=dpi)
+        else:
+            page_images = _render_pages_pdf2image(pdf_path, dpi=dpi)
         scale = dpi / 72.0
 
         with pdfplumber.open(pdf_path) as pdf:
@@ -248,6 +267,12 @@ def main():
         default=DEFAULT_DPI,
         help=f"Crop image resolution in DPI (default: {DEFAULT_DPI})",
     )
+    parser.add_argument(
+        "--renderer",
+        choices=["pymupdf", "pdf2image"],
+        default="pymupdf",
+        help="PDF renderer: pymupdf (no poppler) or pdf2image (requires poppler) (default: pymupdf)",
+    )
     args = parser.parse_args()
 
     print("🚀 Starting OCR dataset creation from Theseus.fi\n")
@@ -268,7 +293,7 @@ def main():
     print("\n📝 Extracting text from PDFs...")
     records = []
     for pdf_file in tqdm(pdf_files, desc="Processing PDFs"):
-        pdf_data = extract_text_from_pdf(pdf_file, dpi=args.dpi)
+        pdf_data = extract_text_from_pdf(pdf_file, dpi=args.dpi, renderer=args.renderer)
         for page in pdf_data["pages"]:
             for para in page["paragraphs"]:
                 records.append({
