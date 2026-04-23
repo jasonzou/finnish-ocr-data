@@ -3,6 +3,7 @@ import os
 import json
 import glob
 import pdfplumber
+from pdf2image import convert_from_path
 from tqdm import tqdm
 
 PDF_FOLDER = "theseus_pdfs"
@@ -16,8 +17,14 @@ def extract_text_from_pdf(pdf_path: str, resolution: int = 300) -> list[dict]:
 
     records = []
     try:
+        # Render all pages at target DPI upfront.
+        page_images = convert_from_path(pdf_path, dpi=resolution)
+
         with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages):
+            for page_num, (page, pil_img) in enumerate(zip(pdf.pages, page_images)):
+                # pdfplumber coords are in PDF points; scale to pixels at target DPI.
+                scale = resolution / 72.0
+
                 text_lines = page.extract_text_lines(layout=True)
 
                 # Group lines into paragraphs, tracking the bounding box of each.
@@ -48,15 +55,15 @@ def extract_text_from_pdf(pdf_path: str, resolution: int = 300) -> list[dict]:
                 if current_texts:
                     para_groups.append((current_texts, (current_bbox[0], current_bbox[1], current_bbox[2], current_bbox[3])))
 
-                # Render page at 72 dpi once, crop each paragraph.
-                page_image = page.to_image(resolution=resolution)
-                scale = page_image.scale
-                pil_img = page_image.original
-
+                img_w, img_h = pil_img.size
                 for para_idx, (texts, bbox) in enumerate(para_groups):
                     x0, top, x1, bottom = bbox
                     pad = 2
-                    crop = pil_img.crop((x0 * scale - pad, top * scale - pad, x1 * scale + pad, bottom * scale + pad))
+                    left   = max(0, x0 * scale - pad)
+                    upper  = max(0, top * scale - pad)
+                    right  = min(img_w, x1 * scale + pad)
+                    lower  = min(img_h, bottom * scale + pad)
+                    crop = pil_img.crop((left, upper, right, lower))
                     crop_filename = f"p{page_num + 1}_para{para_idx + 1}.png"
                     crop.save(os.path.join(crop_dir, crop_filename))
                     records.append({
