@@ -39,7 +39,7 @@ PDF_FOLDER = "theseus_pdfs"
 DATASET_FOLDER = "theseus_ocr_dataset"
 
 # Number of PDFs to download for testing
-NUM_PDFS_TO_DOWNLOAD = 1000
+NUM_PDFS_TO_DOWNLOAD = 10
 
 # Metadata format to harvest (Dublin Core is standard)
 METADATA_PREFIX = "oai_dc"
@@ -205,7 +205,7 @@ def extract_text_from_pdf(pdf_path):
                     para_groups.append((current_texts, tuple(current_bbox)))  # type: ignore[arg-type]
 
                 # Render page at 72 dpi once, then crop each paragraph.
-                page_image = page.to_image(resolution=72)
+                page_image = page.to_image(resolution=300)
                 scale = page_image.scale
                 pil_img = page_image.original
 

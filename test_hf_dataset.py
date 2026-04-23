@@ -14,7 +14,7 @@ def main() -> None:
     print(f"  Features  : {ds.features}")
 
     print("\nSample records:")
-    for i, row in enumerate(ds.select(range(3))):
+    for i, row in enumerate(ds.select(range(6))):
         img = row["image"]
         out_path = f"test_sample_{i}.jpg"
         img.convert("RGB").save(out_path, format="JPEG")
