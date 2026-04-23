@@ -65,7 +65,7 @@ def extract_text_from_pdf(pdf_path: str, resolution: int = 300) -> list[dict]:
                     lower  = min(img_h, bottom * scale + pad)
                     crop = pil_img.crop((left, upper, right, lower))
                     crop_filename = f"p{page_num + 1}_para{para_idx + 1}.png"
-                    crop.save(os.path.join(crop_dir, crop_filename))
+                    crop.save(os.path.join(crop_dir, crop_filename), dpi=(resolution, resolution))
                     records.append({
                         "pdf_file": os.path.basename(pdf_path),
                         "page": page_num + 1,

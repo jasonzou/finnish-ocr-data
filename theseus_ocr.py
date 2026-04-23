@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 from urllib.parse import urlparse, parse_qs
 from sickle import Sickle
 import pdfplumber
+from pdf2image import convert_from_path
 from tqdm import tqdm
 import time
 
@@ -40,6 +41,9 @@ DATASET_FOLDER = "theseus_ocr_dataset"
 
 # Number of PDFs to download for testing
 NUM_PDFS_TO_DOWNLOAD = 10
+
+# Image resolution for paragraph crops
+DEFAULT_DPI = 300
 
 # Metadata format to harvest (Dublin Core is standard)
 METADATA_PREFIX = "oai_dc"
@@ -156,11 +160,7 @@ def download_pdfs(pdf_urls):
     return downloaded_files
 
 # ---------------------- STEP 3: EXTRACT TEXT ----------------------
-def extract_text_from_pdf(pdf_path):
-    """
-    Extracts text from a PDF, organizing it by page, paragraph, and line.
-    Uses pdfplumber to get detailed layout information.
-    """
+def extract_text_from_pdf(pdf_path, dpi: int = DEFAULT_DPI):
     pdf_data = {
         "pdf_file": os.path.basename(pdf_path),
         "pages": []
@@ -171,12 +171,14 @@ def extract_text_from_pdf(pdf_path):
     os.makedirs(crop_dir, exist_ok=True)
 
     try:
+        page_images = convert_from_path(pdf_path, dpi=dpi)
+        scale = dpi / 72.0
+
         with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages):
+            for page_num, (page, pil_img) in enumerate(zip(pdf.pages, page_images)):
                 text_lines = page.extract_text_lines(layout=True)
                 lines = [line["text"] for line in text_lines if line["text"].strip()]
 
-                # Group lines into paragraphs, tracking the bounding box of each.
                 para_groups: list[tuple[list[str], tuple[float, float, float, float]]] = []
                 current_texts: list[str] = []
                 current_bbox: list[float] = []
@@ -204,18 +206,18 @@ def extract_text_from_pdf(pdf_path):
                 if current_texts:
                     para_groups.append((current_texts, tuple(current_bbox)))  # type: ignore[arg-type]
 
-                # Render page at 72 dpi once, then crop each paragraph.
-                page_image = page.to_image(resolution=300)
-                scale = page_image.scale
-                pil_img = page_image.original
-
+                img_w, img_h = pil_img.size
                 paragraphs = []
                 for para_idx, (texts, bbox) in enumerate(para_groups):
                     x0, top, x1, bottom = bbox
-                    crop_box = (x0 * scale, top * scale, x1 * scale, bottom * scale)
-                    crop = pil_img.crop(crop_box)
+                    pad = 2
+                    left  = max(0,     x0 * scale - pad)
+                    upper = max(0,     top * scale - pad)
+                    right = min(img_w, x1 * scale + pad)
+                    lower = min(img_h, bottom * scale + pad)
+                    crop = pil_img.crop((left, upper, right, lower))
                     crop_filename = f"p{page_num + 1}_para{para_idx + 1}.png"
-                    crop.save(os.path.join(crop_dir, crop_filename))
+                    crop.save(os.path.join(crop_dir, crop_filename), dpi=(dpi, dpi))
                     paragraphs.append({
                         "text": " ".join(texts),
                         "crop": os.path.join("paragraph_crops", pdf_stem, crop_filename),
@@ -237,6 +239,17 @@ def extract_text_from_pdf(pdf_path):
 
 # ---------------------- MAIN EXECUTION ----------------------
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Harvest and process Theseus.fi theses.")
+    parser.add_argument(
+        "--dpi", "-d",
+        type=int,
+        choices=[72, 144, 200, 400],
+        default=DEFAULT_DPI,
+        help=f"Crop image resolution in DPI (default: {DEFAULT_DPI})",
+    )
+    args = parser.parse_args()
+
     print("🚀 Starting OCR dataset creation from Theseus.fi\n")
 
     # Step 1: Get PDF URLs
@@ -255,7 +268,7 @@ def main():
     print("\n📝 Extracting text from PDFs...")
     records = []
     for pdf_file in tqdm(pdf_files, desc="Processing PDFs"):
-        pdf_data = extract_text_from_pdf(pdf_file)
+        pdf_data = extract_text_from_pdf(pdf_file, dpi=args.dpi)
         for page in pdf_data["pages"]:
             for para in page["paragraphs"]:
                 records.append({
