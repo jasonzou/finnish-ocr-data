@@ -57,7 +57,7 @@ def extract_text_from_pdf(pdf_path: str, resolution: int = 300,
                     if not line_text:
                         continue
                     x0, top, x1, bottom = line["x0"], line["top"], line["x1"], line["bottom"]
-                    if last_bottom is not None and (top - last_bottom) > 5:
+                    if last_bottom is not None and (top - last_bottom) > 12:
                         if current_texts:
                             para_groups.append((current_texts, (current_bbox[0], current_bbox[1], current_bbox[2], current_bbox[3])))
                             current_texts, current_bbox = [], []
@@ -98,7 +98,7 @@ def extract_text_from_pdf(pdf_path: str, resolution: int = 300,
                         "pdf_file": os.path.basename(pdf_path),
                         "page": page_num + 1,
                         "image": os.path.join("paragraph_crops", pdf_stem, crop_filename),
-                        "text": " ".join(texts),
+                        "text": "\n".join(texts),
                     })
 
     except Exception as e:
